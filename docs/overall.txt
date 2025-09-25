@@ -1,0 +1,213 @@
+Requirements: viola (Go library and CLI)
+
+A Go module that loads and saves TOML configuration while encrypting selected values with age in ASCII-armored blocks embedded directly in the TOML file. It also emits an ASCII-art QR code of each ciphertext for easy out-of-band transfer/recovery. Designed primarily as a library (can include an optional thin CLI).
+
+# 🎭 viola
+
+`viola` is a command-line utility for maintaining and creating **encrypted TOML configuration files** using [age](https://github.com/FiloSottile/age).
+
+Why **Viola**? The name comes from Shakespeare’s *Twelfth Night*. Viola is a character who **conceals her identity** in order to safely move between worlds. She appears in one form publicly, while her true self is hidden, revealed only to those who can see past the disguise.
+
+That metaphor is exactly what `viola` does for your configs:
+- **Public face** → easy to version-control, store, and share (encrypted TOML).
+- **True identity** → the cleartext secrets, visible only when unlocked with your `age` key.
+- **Transformation** → like Viola’s disguise, `viola` allows config files to take on a safe, portable form.
+
+---
+
+## ✨ Features
+- Encrypts and decrypts TOML config files with **age**.
+- Keeps secrets safe while enabling them to be committed to Git.
+- Designed for **immutable infrastructure**: generate once, deploy everywhere.
+- Lightweight: a single binary with no external dependencies.
+
+---
+
+## 🔐 Acronym
+`viola` also works as a backronym that reflects its purpose:
+
+**V.I.O.L.A.**
+- **V**ersatile
+- **I**mmutable
+- **O**bscured
+- **L**oader for
+- **A**rchives
+
+
+⸻
+
+	1.	Goals & Non-Goals
+
+Goals
+	•	Allow humans to manually edit most of the TOML, while specific keys are encrypted at rest.
+	•	Use age for cryptography (X25519 recipients as default; optionally add an age-scrypt passphrase recipient).
+	•	Automatically encrypt any TOML key whose name starts with “private_” (at any nesting depth).
+	•	Support arbitrary value types (string, number, bool, array, inline table): serialize to canonical JSON first, encrypt the JSON bytes, and store the ASCII-armored age block as a TOML multiline string.
+	•	Provide easy decryption in memory for applications; no external binaries required at runtime.
+	•	For every encrypted field, generate a monospace ASCII-art QR code of the armored ciphertext. Place it as TOML comments adjacent to the value, and expose it via metadata.
+	•	Be idempotent: re-saving should not re-encrypt existing values unless the plaintext changed.
+	•	Minimal, stable, dependency-light; pure Go runtime.
+
+Non-Goals
+	•	Not a full secrets manager or KMS.
+	•	No built-in cloud KMS support.
+	•	No guarantee to preserve arbitrary user comments or key ordering in TOML.
+
+⸻
+
+	2.	Recipients & Encryption Model
+
+	•	Default: encrypt to recipients (age X25519 public keys).
+	•	Multiple recipients can be included; all listed can decrypt.
+	•	Self-encryption: if no recipients are provided, encrypt to the app’s own identity (generated on first run and stored in $XDG_CONFIG_HOME//age/keys.txt).
+	•	Optional passphrase recipient (age-scrypt): if configured, include a passphrase recipient for break-glass recovery. A PassphraseProvider callback supplies the passphrase when needed.
+	•	Rotation: add new recipients and save → ciphertext decryptable by old and new. Later prune old recipients.
+	•	Metadata: record which recipients and whether a passphrase was included; store in TOML comments near the QR and expose in metadata.
+
+⸻
+
+	3.	Module Layout
+
+/internal/qr        – QR rendering (ASCII)
+/internal/walk      – Generic tree walker over parsed TOML
+/pkg/enc            – age helpers (encrypt/decrypt, armor)
+/pkg/viola          – Public API (Load/Save/Transform)
+/cmd/viola          – Optional thin CLI
+
+⸻
+
+	4.	Public API (viola)
+
+KeySources:
+	•	IdentitiesFile: path to age private key(s)
+	•	IdentitiesData: optional in-memory keys
+	•	RecipientsFile: path to recipients
+	•	Recipients: explicit recipient strings
+	•	PassphraseProvider: callback for passphrase
+
+Options:
+	•	Keys: KeySources
+	•	PrivatePrefix: default “private_”
+	•	ShouldEncrypt: optional function override
+	•	EmitASCIIQR: default true
+	•	QRCommentPrefix: default “# “
+	•	Indent: default two spaces
+
+FieldMeta:
+	•	Path: slice of key names
+	•	WasEncrypted: bool
+	•	Armored: ASCII-armored payload
+	•	ASCIIQR: QR as ASCII string
+	•	UsedRecipients: list of recipients used
+	•	UsedPassphrase: bool
+
+Result:
+	•	Tree: decrypted config tree (native Go types)
+	•	Fields: metadata for each encrypted field
+
+Functions:
+	•	Load([]byte, Options) → *Result
+	•	Save(tree, Options) → ([]byte TOML, []FieldMeta, error)
+	•	Transform([]byte, Options, func(tree any) error) → ([]byte, []FieldMeta, error)
+
+⸻
+
+	5.	File Format (output TOML)
+
+Example for private_client_secret:
+
+QR code of ciphertext as ASCII
+
+████████ … (many rows)
+
+recipients: age1abc…, age1xyz…
+
+passphrase: no
+
+private_client_secret = “””
+—–BEGIN AGE ENCRYPTED FILE—–
+YWdlLWVuY3J5cHRpb24ub3JnL3Yx
+… full ASCII armor …
+—–END AGE ENCRYPTED FILE—–
+“””
+
+⸻
+
+	6.	Behavior Details
+
+	•	Encrypt keys that start with PrivatePrefix or match ShouldEncrypt.
+	•	At any depth (tables, arrays of tables).
+	•	Non-scalars serialized to JSON before encryption.
+	•	Already encrypted values left unchanged unless plaintext changed.
+	•	Load detects armored blocks, decrypts with identities/passphrase, and JSON-decodes back into Go values.
+	•	Arrays/tables: only encrypt fields, not whole element.
+
+⸻
+
+	7.	ASCII QR
+
+	•	QR encodes the entire ASCII-armored payload.
+	•	Rendered as text using dark=█ and light=space.
+	•	Quiet zone included.
+	•	Configurable comment prefix.
+	•	Should scale down automatically to fit typical terminal widths.
+
+⸻
+
+	8.	Dependencies
+
+	•	github.com/burntsushi: TOML
+   	* https://github.com/urfave/cli: command line parsing
+	•	filippo.io/age and filippo.io/age/armor
+	•	github.com/skip2/go-qrcode (or minimal QR encoder)
+	•	encoding/json from stdlib
+* https://github.com/charmbracelet/bubbletea and https://github.com/charmbracelet/lipgloss
+
+No CGO, no external binaries.
+
+⸻
+
+	9.	Errors & Edge Cases
+
+	•	Save without any recipients or self identity → error.
+	•	Load without identities/passphrase for encrypted values → error (include key path).
+	•	Malformed armor → error.
+	•	JSON encode/decode errors propagate.
+	•	Numbers: use json.Number to preserve int/float.
+	•	Normalize line endings in armor.
+
+⸻
+
+	10.	Security Considerations
+
+	•	Confidentiality and integrity from age AEAD.
+	•	Never log plaintext.
+	•	Zero buffers best-effort.
+	•	Identity files chmod 0600, directories 0700.
+	•	Enforce strong passphrase if used.
+
+⸻
+
+	11.	Performance
+
+	•	Configs are small; no special tuning needed.
+	•	Work is per-field.
+	•	QR generation is O(n) in ciphertext size; can be disabled.
+
+⸻
+
+	12.	Testing & Acceptance Criteria
+
+	•	Unit tests for round-trip on all types (string, int, bool, array, table).
+	•	Nested and multiple private_ keys.
+	•	Idempotent save behavior.
+	•	Failures when recipients/identities missing.
+	•	Golden tests: expected TOML with QR and recipient lines.
+	•	Fuzz tests: random trees with random private_ keys.
+	•	Example tests compile and run.
+
+⸻
+
+Safe defaults: output to stdout unless explicitly writing in place.
+
+⸻
