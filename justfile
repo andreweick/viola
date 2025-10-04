@@ -1,3 +1,7 @@
+# When a recipe isn't found here, search up the directory tree for it
+# Stops at the first justfile without 'set fallback' (usually project root)
+set fallback
+
 # Build the viola CLI
 build:
     go build -o bin/viola ./cmd/viola
